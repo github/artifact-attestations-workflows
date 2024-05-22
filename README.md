@@ -13,7 +13,7 @@ the [blog post](https://github.blog/2024-05-02-introducing-artifact-attestations
 
 ## License 
 
-This project is licensed under the terms of the MIT open source license. Please refer to [MIT](./LICENSE.txt) for the full terms.
+This project is licensed under the terms of the CC0 open source license. Please refer to [CC0](./LICENSE.txt) for the full terms.
 
 ## Maintainers 
 
