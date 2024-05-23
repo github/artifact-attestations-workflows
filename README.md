@@ -2,8 +2,8 @@
 
 This repository showcases how to use reusable workflows with your repository to generate [artifact attestations](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds).
 
-This allows you establish build provenance for artifacts built
-in your repositories.
+Artifact attestations allow you establish build provenance for artifacts
+built in your repositories.
 
 ## Background 
 
