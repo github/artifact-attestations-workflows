@@ -1,0 +1,38 @@
+name: Build and attest Python Fibonacci Sequence artifact
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: build package
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29 # v4.1.6
+
+      - uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d # v5.1.0
+        with:
+          python-version: "3.x"
+
+      - name: Build artifact
+        run: tar -czf pyfib.tar.gz ./pyfib
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@49df96e17e918a15956db358890b08e61c704919 # v1.2.0
+        with:
+          subject-path: "pyfib.tar.gz"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
+        with:
+          path: "pyfib.tar.gz"
+
+      - name: Verify build artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh attestation verify pyfib.tar.gz --owner "$GITHUB_REPOSITORY_OWNER"
