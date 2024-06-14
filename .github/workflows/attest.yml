@@ -20,6 +20,6 @@ jobs:
       - uses: actions/download-artifact@65a9edc5881444af0b9093a5e628f2fe47ea3b2e # v4.1.7
         with:
           name: ${{ inputs.artifact }}
-      - uses: actions/attest-build-provenance@49df96e17e918a15956db358890b08e61c704919 # v1.2.0
+      - uses: actions/attest-build-provenance@534b352d658f90498fd148d231fdbf88f3886a3a # v1.3.1
         with:
           subject-path: "*"
