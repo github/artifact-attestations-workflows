@@ -1,0 +1,601 @@
+name: Build APK
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+      - name: Create project
+        run: |
+          mkdir -p app/src/main/java/com/my/assistant app/src/main/res/xml app/src/main/res/values
+
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "assistant"
+          include(":app")
+          EOF
+
+          cat > build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          EOF
+
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g
+          android.useAndroidX=true
+          EOF
+
+          cat > app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+          android {
+              namespace = "com.my.assistant"
+              compileSdk = 34
+              defaultConfig {
+                  applicationId = "com.my.assistant"
+                  minSdk = 26
+                  targetSdk = 34
+                  versionCode = 2
+                  versionName = "1.1"
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          EOF
+
+          cat > app/src/main/res/values/strings.xml <<'EOF'
+          <resources>
+              <string name="app_name">دستیار</string>
+              <string name="desc">اجازه می‌دهد دستیار روی صفحه کلیک کند، تایپ کند و بین برنامه‌ها حرکت کند.</string>
+          </resources>
+          EOF
+
+          cat > app/src/main/res/xml/accessibility_config.xml <<'EOF'
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+              android:accessibilityEventTypes="typeAllMask"
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:accessibilityFlags="flagDefault|flagReportViewIds"
+              android:canRetrieveWindowContent="true"
+              android:canPerformGestures="true"
+              android:notificationTimeout="100"
+              android:description="@string/desc" />
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.CALL_PHONE" />
+              <uses-permission android:name="android.permission.SEND_SMS" />
+              <uses-permission android:name="android.permission.READ_CONTACTS" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+              <application
+                  android:label="@string/app_name"
+                  android:usesCleartextTraffic="true"
+                  android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">
+                  <activity android:name=".MainActivity" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+                  <service
+                      android:name=".OverlayService"
+                      android:exported="false"
+                      android:foregroundServiceType="specialUse">
+                      <property
+                          android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                          android:value="personal_assistant" />
+                  </service>
+                  <service
+                      android:name=".AgentAccessibilityService"
+                      android:exported="true"
+                      android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+                      <intent-filter>
+                          <action android:name="android.accessibilityservice.AccessibilityService" />
+                      </intent-filter>
+                      <meta-data
+                          android:name="android.accessibilityservice"
+                          android:resource="@xml/accessibility_config" />
+                  </service>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/java/com/my/assistant/MainActivity.kt <<'EOF'
+          package com.my.assistant
+
+          import android.Manifest
+          import android.app.Activity
+          import android.content.Intent
+          import android.net.Uri
+          import android.os.Bundle
+          import android.provider.Settings
+          import android.widget.*
+
+          class MainActivity : Activity() {
+              override fun onCreate(b: Bundle?) {
+                  super.onCreate(b)
+                  val root = LinearLayout(this)
+                  root.orientation = LinearLayout.VERTICAL
+                  root.setPadding(40, 60, 40, 40)
+
+                  fun label(t: String) {
+                      val v = TextView(this); v.text = t; v.textSize = 15f; v.setPadding(0, 24, 0, 4); root.addView(v)
+                  }
+                  fun btn(t: String, f: () -> Unit) {
+                      val v = Button(this); v.text = t; v.setOnClickListener { f() }; root.addView(v)
+                  }
+
+                  val title = TextView(this)
+                  title.text = "دستیار هوشمند"
+                  title.textSize = 24f
+                  root.addView(title)
+
+                  label("مجوزها (به ترتیب)")
+                  btn("۱) نمایش روی برنامه‌های دیگر") {
+                      startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + packageName)))
+                  }
+                  btn("۲) تماس، پیامک، مخاطبین، اعلان") {
+                      requestPermissions(arrayOf(
+                          Manifest.permission.CALL_PHONE, Manifest.permission.SEND_SMS,
+                          Manifest.permission.READ_CONTACTS, Manifest.permission.POST_NOTIFICATIONS), 1)
+                  }
+                  btn("۳) اطلاعات برنامه (Allow restricted settings)") {
+                      startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + packageName)))
+                  }
+                  btn("۴) فعال‌سازی دسترسی‌پذیری") {
+                      startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                  }
+                  label("اجرا")
+                  btn("شروع دکمه‌ی شناور") {
+                      if (!Settings.canDrawOverlays(this)) {
+                          Toast.makeText(this, "اول مجوز شماره ۱ را بده", Toast.LENGTH_LONG).show()
+                      } else {
+                          startForegroundService(Intent(this, OverlayService::class.java))
+                      }
+                  }
+                  btn("توقف") { stopService(Intent(this, OverlayService::class.java)) }
+
+                  val sv = ScrollView(this)
+                  sv.addView(root)
+                  setContentView(sv)
+              }
+          }
+          EOF
+
+          cat > app/src/main/java/com/my/assistant/Agent.kt <<'EOF'
+          package com.my.assistant
+
+          import android.content.Context
+          import org.json.JSONArray
+          import org.json.JSONObject
+          import java.net.HttpURLConnection
+          import java.net.URL
+
+          object Agent {
+              val history = JSONArray()
+              const val BASE = "https://assistant.samirallah516.workers.dev"
+
+              val SYS = """You are a friendly phone assistant living on the user's Android phone. Talk like a warm close friend, in the same language the user writes (Persian by default). Keep replies short.
+          You can control the phone. ALWAYS answer with ONLY one JSON object, no markdown, in this format:
+          {"reply":"your friendly message","actions":[],"continue":false}
+          Action objects (use only when the user asks for something to be done):
+          {"type":"call","target":"contact name or phone number"}
+          {"type":"sms","target":"contact name or phone number","text":"message"}
+          {"type":"open_app","name":"app name as shown on the phone"}
+          {"type":"settings","page":"wifi|bluetooth|display|sound|battery|location|apps|airplane|main"}
+          {"type":"click","text":"visible text of the button to tap"}
+          {"type":"type","text":"text to type in the focused field"}
+          {"type":"scroll_down"} {"type":"scroll_up"} {"type":"back"} {"type":"home"} {"type":"recents"} {"type":"notifications"}
+          Set "continue":true when you need to see the screen afterwards to do the next step; the app will then send you the screen contents. Set it false when the task is finished. If the user just chats, use an empty actions list."""
+
+              fun chat(ctx: Context, msg: String): JSONObject {
+                  history.put(JSONObject().put("role", "user").put("content", msg))
+                  while (history.length() > 20) history.remove(0)
+                  val msgs = JSONArray().put(JSONObject().put("role", "system").put("content", SYS))
+                  for (i in 0 until history.length()) msgs.put(history.get(i))
+                  val body = JSONObject().put("messages", msgs)
+                  val c = URL(BASE).openConnection() as HttpURLConnection
+                  c.requestMethod = "POST"
+                  c.connectTimeout = 20000
+                  c.readTimeout = 60000
+                  c.doOutput = true
+                  c.setRequestProperty("Content-Type", "application/json")
+                  c.outputStream.use { it.write(body.toString().toByteArray()) }
+                  val code = c.responseCode
+                  val txt = (if (code < 400) c.inputStream else c.errorStream).bufferedReader().use { it.readText() }
+                  if (code >= 400) throw Exception("HTTP " + code + ": " + txt.take(200))
+                  val content = JSONObject(txt).getJSONArray("choices").getJSONObject(0)
+                      .getJSONObject("message").getString("content")
+                  history.put(JSONObject().put("role", "assistant").put("content", content))
+                  val s = content.indexOf('{')
+                  val e = content.lastIndexOf('}')
+                  return try {
+                      JSONObject(content.substring(s, e + 1))
+                  } catch (x: Exception) {
+                      JSONObject().put("reply", content)
+                  }
+              }
+          }
+          EOF
+
+          cat > app/src/main/java/com/my/assistant/AgentAccessibilityService.kt <<'EOF'
+          package com.my.assistant
+
+          import android.accessibilityservice.AccessibilityService
+          import android.os.Bundle
+          import android.view.accessibility.AccessibilityEvent
+          import android.view.accessibility.AccessibilityNodeInfo
+
+          class AgentAccessibilityService : AccessibilityService() {
+              companion object {
+                  var inst: AgentAccessibilityService? = null
+              }
+
+              override fun onServiceConnected() { inst = this }
+              override fun onDestroy() { inst = null; super.onDestroy() }
+              override fun onAccessibilityEvent(e: AccessibilityEvent?) {}
+              override fun onInterrupt() {}
+
+              fun clickText(t: String): Boolean {
+                  val root = rootInActiveWindow ?: return false
+                  for (n in root.findAccessibilityNodeInfosByText(t)) {
+                      var c: AccessibilityNodeInfo? = n
+                      while (c != null && !c.isClickable) c = c.parent
+                      if (c != null && c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+                  }
+                  return false
+              }
+
+              fun typeText(t: String): Boolean {
+                  val f = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
+                  val b = Bundle()
+                  b.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, t)
+                  return f.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, b)
+              }
+
+              private fun findScrollable(n: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+                  if (n == null) return null
+                  if (n.isScrollable) return n
+                  for (i in 0 until n.childCount) {
+                      val r = findScrollable(n.getChild(i))
+                      if (r != null) return r
+                  }
+                  return null
+              }
+
+              fun scroll(forward: Boolean): Boolean {
+                  val s = findScrollable(rootInActiveWindow) ?: return false
+                  return s.performAction(
+                      if (forward) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                      else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
+              }
+
+              fun screenText(): String {
+                  val sb = StringBuilder()
+                  fun walk(n: AccessibilityNodeInfo?) {
+                      if (n == null || sb.length > 3000) return
+                      val t = n.text ?: n.contentDescription
+                      if (t != null && t.isNotBlank()) {
+                          if (n.isClickable) sb.append("[دکمه] ")
+                          sb.append(t).append("\n")
+                      }
+                      for (i in 0 until n.childCount) walk(n.getChild(i))
+                  }
+                  walk(rootInActiveWindow)
+                  return sb.toString()
+              }
+          }
+          EOF
+
+          cat > app/src/main/java/com/my/assistant/OverlayService.kt <<'EOF'
+          package com.my.assistant
+
+          import android.app.AlertDialog
+          import android.app.Notification
+          import android.app.NotificationChannel
+          import android.app.NotificationManager
+          import android.app.Service
+          import android.accessibilityservice.AccessibilityService
+          import android.content.Intent
+          import android.graphics.Color
+          import android.graphics.PixelFormat
+          import android.graphics.drawable.GradientDrawable
+          import android.net.Uri
+          import android.os.Build
+          import android.os.Handler
+          import android.os.IBinder
+          import android.os.Looper
+          import android.provider.ContactsContract
+          import android.provider.Settings
+          import android.telephony.SmsManager
+          import android.view.ContextThemeWrapper
+          import android.view.Gravity
+          import android.view.MotionEvent
+          import android.view.View
+          import android.view.WindowManager
+          import android.widget.*
+          import org.json.JSONArray
+          import org.json.JSONObject
+          import java.util.concurrent.CountDownLatch
+          import java.util.concurrent.TimeUnit
+          import kotlin.math.abs
+
+          class OverlayService : Service() {
+              private lateinit var wm: WindowManager
+              private lateinit var btn: TextView
+              private lateinit var panel: LinearLayout
+              private lateinit var logView: TextView
+              private lateinit var scroll: ScrollView
+              private lateinit var input: EditText
+              private lateinit var btnLp: WindowManager.LayoutParams
+              private lateinit var panelLp: WindowManager.LayoutParams
+              private var panelShown = false
+              private val h = Handler(Looper.getMainLooper())
+              private val log = StringBuilder()
+              private var busy = false
+
+              private fun dp(i: Int) = (i * resources.displayMetrics.density).toInt()
+              private fun ui(f: () -> Unit) { h.post { f() } }
+              override fun onBind(i: Intent?): IBinder? = null
+
+              override fun onCreate() {
+                  super.onCreate()
+                  val nm = getSystemService(NotificationManager::class.java)
+                  nm.createNotificationChannel(NotificationChannel("a", "Assistant", NotificationManager.IMPORTANCE_MIN))
+                  val n = Notification.Builder(this, "a").setContentTitle("دستیار فعال است")
+                      .setSmallIcon(android.R.drawable.ic_dialog_info).build()
+                  startForeground(1, n)
+
+                  wm = getSystemService(WINDOW_SERVICE) as WindowManager
+                  val type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+
+                  btn = TextView(this)
+                  btn.text = "🤖"
+                  btn.textSize = 26f
+                  btn.gravity = Gravity.CENTER
+                  val bg = GradientDrawable()
+                  bg.shape = GradientDrawable.OVAL
+                  bg.setColor(Color.parseColor("#CC3F51B5"))
+                  btn.background = bg
+                  btnLp = WindowManager.LayoutParams(dp(56), dp(56), type,
+                      WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT)
+                  btnLp.gravity = Gravity.TOP or Gravity.START
+                  btnLp.x = 0
+                  btnLp.y = dp(300)
+                  btn.setOnTouchListener(object : View.OnTouchListener {
+                      var sx = 0; var sy = 0; var tx = 0f; var ty = 0f; var moved = false
+                      override fun onTouch(v: View, e: MotionEvent): Boolean {
+                          when (e.action) {
+                              MotionEvent.ACTION_DOWN -> { sx = btnLp.x; sy = btnLp.y; tx = e.rawX; ty = e.rawY; moved = false }
+                              MotionEvent.ACTION_MOVE -> {
+                                  val dx = (e.rawX - tx).toInt(); val dy = (e.rawY - ty).toInt()
+                                  if (abs(dx) > 10 || abs(dy) > 10) moved = true
+                                  btnLp.x = sx + dx; btnLp.y = sy + dy
+                                  wm.updateViewLayout(btn, btnLp)
+                              }
+                              MotionEvent.ACTION_UP -> if (!moved) { if (panelShown) hidePanel() else showPanel() }
+                          }
+                          return true
+                      }
+                  })
+                  wm.addView(btn, btnLp)
+
+                  panel = LinearLayout(this)
+                  panel.orientation = LinearLayout.VERTICAL
+                  panel.setPadding(dp(12), dp(12), dp(12), dp(12))
+                  val pbg = GradientDrawable()
+                  pbg.cornerRadius = dp(18).toFloat()
+                  pbg.setColor(Color.WHITE)
+                  panel.background = pbg
+                  logView = TextView(this)
+                  logView.setTextColor(Color.BLACK)
+                  logView.textSize = 15f
+                  scroll = ScrollView(this)
+                  scroll.addView(logView)
+                  panel.addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(240)))
+                  input = EditText(this)
+                  input.hint = "بنویس..."
+                  input.setTextColor(Color.BLACK)
+                  input.setHintTextColor(Color.GRAY)
+                  panel.addView(input)
+                  val row = LinearLayout(this)
+                  val send = Button(this)
+                  send.text = "ارسال"
+                  send.setOnClickListener {
+                      val t = input.text.toString().trim()
+                      if (t.isNotEmpty() && !busy) { input.setText(""); run(t) }
+                  }
+                  val close = Button(this)
+                  close.text = "بستن"
+                  close.setOnClickListener { hidePanel() }
+                  row.addView(send, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                  row.addView(close, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                  panel.addView(row)
+                  panelLp = WindowManager.LayoutParams((resources.displayMetrics.widthPixels * 0.94).toInt(),
+                      WindowManager.LayoutParams.WRAP_CONTENT, type,
+                      WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL, PixelFormat.TRANSLUCENT)
+                  panelLp.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                  panelLp.y = dp(60)
+                  panelLp.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN
+              }
+
+              override fun onStartCommand(i: Intent?, f: Int, id: Int): Int = START_STICKY
+
+              override fun onDestroy() {
+                  try { wm.removeView(btn) } catch (e: Exception) {}
+                  hidePanel()
+                  super.onDestroy()
+              }
+
+              private fun showPanel() {
+                  if (!panelShown) { wm.addView(panel, panelLp); panelShown = true }
+              }
+              private fun hidePanel() {
+                  if (panelShown) { try { wm.removeView(panel) } catch (e: Exception) {}; panelShown = false }
+              }
+              private fun addLog(s: String) {
+                  log.append(s).append("\n\n")
+                  logView.text = log
+                  scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+              }
+
+              private fun run(msg: String) {
+                  busy = true
+                  addLog("🙂 " + msg)
+                  Thread {
+                      var acted = false
+                      var lastReply = ""
+                      try {
+                          var text = msg
+                          var steps = 0
+                          while (steps < 8) {
+                              steps++
+                              val r = Agent.chat(this, text)
+                              lastReply = r.optString("reply")
+                              ui { addLog("🤖 " + lastReply) }
+                              val acts = r.optJSONArray("actions") ?: JSONArray()
+                              val res = StringBuilder()
+                              for (i in 0 until acts.length()) {
+                                  acted = true
+                                  res.append(execute(acts.getJSONObject(i))).append("\n")
+                              }
+                              if (!r.optBoolean("continue") || acts.length() == 0) break
+                              Thread.sleep(1500)
+                              text = "Action results:\n" + res + "Current screen:\n" +
+                                  (AgentAccessibilityService.inst?.screenText() ?: "(accessibility is off)")
+                          }
+                      } catch (e: Exception) {
+                          ui { addLog("⚠️ " + e.message) }
+                      }
+                      ui {
+                          busy = false
+                          if (acted) Toast.makeText(this, lastReply, Toast.LENGTH_LONG).show() else showPanel()
+                      }
+                  }.start()
+              }
+
+              private fun confirm(msg: String): Boolean {
+                  val latch = CountDownLatch(1)
+                  val ok = booleanArrayOf(false)
+                  ui {
+                      val d = AlertDialog.Builder(ContextThemeWrapper(this, android.R.style.Theme_DeviceDefault_Dialog_Alert))
+                          .setMessage(msg)
+                          .setPositiveButton("بله") { _, _ -> ok[0] = true; latch.countDown() }
+                          .setNegativeButton("نه") { _, _ -> latch.countDown() }
+                          .setOnCancelListener { latch.countDown() }
+                          .create()
+                      d.window?.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
+                      d.show()
+                  }
+                  latch.await(60, TimeUnit.SECONDS)
+                  return ok[0]
+              }
+
+              private fun resolve(t: String): String? {
+                  if (t.matches(Regex("[+0-9 ()-]{3,}"))) return t.replace(" ", "")
+                  val c = contentResolver.query(
+                      ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                      arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER),
+                      ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " LIKE ?",
+                      arrayOf("%" + t + "%"), null)
+                  c?.use { if (it.moveToFirst()) return it.getString(0) }
+                  return null
+              }
+
+              private fun launch(i: Intent) { i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(i) }
+
+              private fun execute(a: JSONObject): String {
+                  ui { hidePanel() }
+                  Thread.sleep(300)
+                  val acc = AgentAccessibilityService.inst
+                  val type = a.optString("type")
+                  try {
+                      if (type == "call") {
+                          val t = a.optString("target")
+                          val num = resolve(t) ?: return "contact not found: " + t
+                          if (!confirm("با " + t + " (" + num + ") تماس بگیرم؟")) return "user cancelled"
+                          launch(Intent(Intent.ACTION_CALL, Uri.parse("tel:" + Uri.encode(num))))
+                          return "call started"
+                      }
+                      if (type == "sms") {
+                          val t = a.optString("target")
+                          val txt = a.optString("text")
+                          val num = resolve(t) ?: return "contact not found: " + t
+                          if (!confirm("به " + t + " پیامک بفرستم؟\n\n" + txt)) return "user cancelled"
+                          val sm = if (Build.VERSION.SDK_INT >= 31) getSystemService(SmsManager::class.java) else SmsManager.getDefault()
+                          sm.sendMultipartTextMessage(num, null, sm.divideMessage(txt), null, null)
+                          return "sms sent"
+                      }
+                      if (type == "open_app") {
+                          val name = a.optString("name").lowercase()
+                          for (ai in packageManager.getInstalledApplications(0)) {
+                              val label = packageManager.getApplicationLabel(ai).toString().lowercase()
+                              if (label.contains(name) || name.contains(label)) {
+                                  val li = packageManager.getLaunchIntentForPackage(ai.packageName)
+                                  if (li != null) { launch(li); return "opened " + label }
+                              }
+                          }
+                          return "app not found"
+                      }
+                      if (type == "settings") {
+                          val act = when (a.optString("page")) {
+                              "wifi" -> Settings.ACTION_WIFI_SETTINGS
+                              "bluetooth" -> Settings.ACTION_BLUETOOTH_SETTINGS
+                              "display" -> Settings.ACTION_DISPLAY_SETTINGS
+                              "sound" -> Settings.ACTION_SOUND_SETTINGS
+                              "battery" -> Settings.ACTION_BATTERY_SAVER_SETTINGS
+                              "location" -> Settings.ACTION_LOCATION_SOURCE_SETTINGS
+                              "apps" -> Settings.ACTION_APPLICATION_SETTINGS
+                              "airplane" -> Settings.ACTION_AIRPLANE_MODE_SETTINGS
+                              else -> Settings.ACTION_SETTINGS
+                          }
+                          launch(Intent(act))
+                          return "settings opened"
+                      }
+                      if (acc == null) return "accessibility service is off"
+                      return when (type) {
+                          "click" -> if (acc.clickText(a.optString("text"))) "clicked" else "text not found on screen"
+                          "type" -> if (acc.typeText(a.optString("text"))) "typed" else "no focused input field"
+                          "scroll_down" -> if (acc.scroll(true)) "scrolled" else "nothing to scroll"
+                          "scroll_up" -> if (acc.scroll(false)) "scrolled" else "nothing to scroll"
+                          "back" -> { acc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK); "back" }
+                          "home" -> { acc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME); "home" }
+                          "recents" -> { acc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_RECENTS); "recents" }
+                          "notifications" -> { acc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS); "notifications" }
+                          else -> "unknown action"
+                      }
+                  } catch (e: Exception) {
+                      return "error: " + e.message
+                  }
+              }
+          }
+          EOF
+
+      - name: Build
+        run: gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: assistant-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
